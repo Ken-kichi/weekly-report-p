@@ -121,11 +121,12 @@ def multi_evaluate_weekly_report(
     print(f"[Review] Score: {state['average_score']}")
 
     if state["average_score"] >= 80:
-        print("→ ACCEPT")
+        print(f"→ ACCEPT（{state['iteration']}回目でスコア {state['average_score']} 点に到達）")
     elif state["iteration"] >= state["max_iteration"]:
-        print("→ STOP (max iteration reached)")
+        print(f"→ STOP（最大試行 {state['max_iteration']} 回に達したため終了）")
     else:
-        print("→ REJECT (below 80)")
+        remaining = state["max_iteration"] - state["iteration"]
+        print(f"→ REJECT（80点未満。残り {remaining} 回の再生成を実行）")
     print()
 
     return state
