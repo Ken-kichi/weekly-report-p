@@ -5,6 +5,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from state import WeeklyReportState
 from dotenv import load_dotenv
 import os
+import typer
 
 load_dotenv()
 
@@ -74,7 +75,8 @@ def generate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
         # 予期せぬ呼び出しでも整合性を保つため警告的に扱う
         state["iteration"] = 0
     next_iter = state["iteration"] + 1
-    print(f"[{next_iter}/{state['max_iteration']}] Generate report (initial)")
+    typer.echo(
+        f"[{next_iter}/{state['max_iteration']}] Generate report (initial)")
     return _invoke_llm(state)
 
 
@@ -84,5 +86,6 @@ def regenerate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
         # 再生成なのに初回扱いにならないよう最低1回目として扱う
         state["iteration"] = 1
     next_iter = state["iteration"] + 1
-    print(f"[{next_iter}/{state['max_iteration']}] Regenerate report with feedback")
+    typer.echo(
+        f"[{next_iter}/{state['max_iteration']}] Regenerate report with feedback")
     return _invoke_llm(state)

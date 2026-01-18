@@ -6,6 +6,7 @@ import re
 from dotenv import load_dotenv
 import os
 from state import WeeklyReportState
+import typer
 
 load_dotenv()
 
@@ -103,7 +104,7 @@ def multi_evaluate_weekly_report(
             report=state["report_draft"]
         )
         results.append(result)
-        print(f"[Review:{role['name']}] Score: {result['score']}")
+        typer.echo(f"[Review:{role['name']}] Score: {result['score']}")
 
     # 重み付き平均で総合スコアを算出
     weighted_socre = sum(
@@ -118,15 +119,16 @@ def multi_evaluate_weekly_report(
             for r in results
         ]
     )
-    print(f"[Review] Score: {state['average_score']}")
+    typer.echo(f"[Review] Score: {state['average_score']}")
 
     if state["average_score"] >= 80:
-        print(f"→ ACCEPT（{state['iteration']}回目でスコア {state['average_score']} 点に到達）")
+        typer.echo(
+            f"→ ACCEPT（{state['iteration']}回目でスコア {state['average_score']} 点に到達）")
     elif state["iteration"] >= state["max_iteration"]:
-        print(f"→ STOP（最大試行 {state['max_iteration']} 回に達したため終了）")
+        typer.echo(f"→ STOP（最大試行 {state['max_iteration']} 回に達したため終了）")
     else:
         remaining = state["max_iteration"] - state["iteration"]
-        print(f"→ REJECT（80点未満。残り {remaining} 回の再生成を実行）")
-    print()
+        typer.echo(f"→ REJECT（80点未満。残り {remaining} 回の再生成を実行）")
+    typer.echo()
 
     return state
