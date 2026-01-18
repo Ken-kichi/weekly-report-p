@@ -1,4 +1,4 @@
-"""TypedDict schemas that make LangGraph state explicit."""
+"""LangGraph で扱う状態を TypedDict で明示する。"""
 
 # LangGraph 全体で共有する状態構造を TypedDict で明示する
 
@@ -6,7 +6,7 @@ from typing import TypedDict
 
 
 class ReviewResult(TypedDict):
-    """Score and feedback emitted by a single reviewer role."""
+    """単一の評価者が出力するスコアとフィードバック。"""
 
     # 単一レビューアーが出力するメタ情報
     reviewer: str  # reviewer role (e.g. tech / manager / writer)
@@ -15,7 +15,7 @@ class ReviewResult(TypedDict):
 
 
 class GitDiffEntry(TypedDict):
-    """`git log -p` output captured for one repository path."""
+    """1つのリポジトリから取得した `git log -p` の内容。"""
 
     # リポジトリパスとその差分テキストの組
     repo_path: str
@@ -23,7 +23,7 @@ class GitDiffEntry(TypedDict):
 
 
 class WeeklyReportState(TypedDict):
-    """Canonical state shared across LangGraph nodes for weekly report generation."""
+    """週報生成フロー全体で共有する状態。"""
 
     # 入力
     git_diffs: list[GitDiffEntry]  # リポジトリごとの差分（生データ）

@@ -1,4 +1,4 @@
-"""Utility node that fetches git diffs for every requested repository."""
+"""CLIで指定されたすべてのリポジトリから git diff を取得するノード。"""
 
 from pathlib import Path
 import subprocess
@@ -9,15 +9,15 @@ LOG_PREFIX = "[load_git]"
 
 
 def load_git_diff(state: WeeklyReportState) -> WeeklyReportState:
-    """Populate `git_diffs` and `git_diff_text` based on the repositories in state."""
-    # CLIで指定されたリポジトリがなければカレントディレクトリを対象にする
+    """Stateにリポジトリ別の diff と連結テキストを格納する。"""
+    # CLIでリポジトリが指定されていなければカレントディレクトリを使う
     repo_paths = state["selected_repos"] or [str(Path.cwd())]
     typer.echo(
         f"{LOG_PREFIX} fetching diffs from {len(repo_paths)} repo(s)...")
 
     diffs = []
     for repo in repo_paths:
-        # リポジトリごとに log -p を実行し raw diff を取得
+        # 各リポジトリで git log -p を実行して差分を取得
         repo_path = Path(repo).expanduser().resolve()
         typer.echo(f"{LOG_PREFIX} running git log -p in {repo_path}")
         cmd = [

@@ -1,4 +1,4 @@
-"""LLM-based evaluator that scores generated reports."""
+"""生成された週報を採点する LLM 評価ノード。"""
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -16,7 +16,7 @@ llm = ChatOpenAI(
 
 
 def _build_prompt(state: WeeklyReportState) -> list:
-    """Create the evaluation prompt demanding a numeric score and feedback."""
+    """数値スコアとフィードバックを必ず返す評価プロンプトを組み立てる。"""
     # 評価観点と出力フォーマットを厳密に指定
     system_prompt = """
 あなたは厳密で公平なレビュー担当者です。
@@ -48,7 +48,7 @@ Feedback:
 
 
 def _parse_score(text: str) -> int:
-    """Extract an integer score from the evaluator LLM output."""
+    """LLM出力からスコアを抽出して0〜100に丸める。"""
     # LLM出力からスコアを抽出し、0〜100にクリップ
     match = re.search(f"Score:\s*(\d+)", text)
     if not match:
@@ -58,7 +58,7 @@ def _parse_score(text: str) -> int:
 
 
 def evaluate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
-    """Run the evaluator chain, append the review, and update the score."""
+    """評価チェーンを実行し、Stateにスコアとレビューを追加する。"""
     # 評価を実行し、Stateへスコアとフィードバックを保存
     messages = _build_prompt(state)
     response = llm.invoke(messages)
@@ -71,7 +71,7 @@ def evaluate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
 
 
 def evaluate_report_file(report_path: str) -> dict:
-    """Evaluate an existing report file and return the score and feedback."""
+    """既存の週報ファイルを採点し、スコアとフィードバックを返す。"""
     # 既存の週報ファイルを評価し、スコアとフィードバックを返す
     with open(report_path, "r", encoding="utf-8") as f:
         report_content = f.read()

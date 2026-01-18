@@ -1,4 +1,4 @@
-"""Multiple-role evaluator that aggregates weighted review scores."""
+"""複数ロールの評価を重み付きで集約するノード。"""
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -44,7 +44,7 @@ REVIEWERS = [
 
 
 def _build_prompt(system_prompt: str, report: str) -> list:
-    """Create the per-role evaluation prompt with a fixed output format."""
+    """各ロール向けの定型評価プロンプトを組み立てる。"""
     human_prompt = f"""
 【週報本文】
 {report}
@@ -63,7 +63,7 @@ Feedback:
 
 
 def _parse_score(text: str) -> int:
-    """Extract and clamp the integer score returned by a reviewer LLM."""
+    """レビューワーLLMが返すスコアを抽出し、0〜100に収める。"""
     match = re.search(f"Score:\s*(\d+)", text)
     if not match:
         raise ValueError("Score が見つかりません")
@@ -72,7 +72,7 @@ def _parse_score(text: str) -> int:
 
 
 def _evaluate_by_role(role: dict, report: str) -> dict:
-    """Run the LLM for a single reviewer role and return the structured result."""
+    """1ロールぶんの評価を実行し、結果を辞書で返す。"""
     messages = _build_prompt(
         system_prompt=role["system_prompt"],
         report=report
@@ -93,7 +93,7 @@ def _evaluate_by_role(role: dict, report: str) -> dict:
 def multi_evaluate_weekly_report(
         state: WeeklyReportState
 ) -> WeeklyReportState:
-    """Iterate through all reviewers, aggregate weighted scores, store feedback."""
+    """全ロールの評価を回し、重み付き平均とフィードバックをStateに反映する。"""
     results: list[dict] = []
 
     for role in REVIEWERS:

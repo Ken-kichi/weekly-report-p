@@ -1,4 +1,4 @@
-"""LangGraph wiring for the weekly report generation workflow."""
+"""週報生成フローを LangGraph で配線するモジュール。"""
 
 from datetime import datetime
 from pathlib import Path

@@ -1,4 +1,4 @@
-"""LLM-backed generator node that produces or rewrites weekly reports."""
+"""週報の下書きをLLMで生成・再生成するノード。"""
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -15,7 +15,7 @@ llm = ChatOpenAI(
 
 
 def _build_prompt(state: WeeklyReportState) -> list:
-    """Construct the system/human prompts depending on iteration count."""
+    """iterationごとに適切なプロンプトを組み立てる。"""
     # iteration 0 は初回生成、以降は再生成として扱う
     if state["iteration"] == 0:
         system_prompt = """
@@ -58,7 +58,7 @@ def _build_prompt(state: WeeklyReportState) -> list:
 
 
 def _invoke_llm(state: WeeklyReportState) -> WeeklyReportState:
-    """LLM を実行して draft と iteration を更新する内部共通処理。"""
+    """LLMを呼び出し draft と iteration を更新する共通処理。"""
     # プロンプトを組み立てて LLM を呼び出す
     messages = _build_prompt(state)
     response = llm.invoke(messages)
@@ -69,7 +69,7 @@ def _invoke_llm(state: WeeklyReportState) -> WeeklyReportState:
 
 
 def generate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
-    """LangGraph node that invokes the LLM and updates the report draft."""
+    """初回の下書きを生成する LangGraph ノード。"""
     if state["iteration"] != 0:
         # 予期せぬ呼び出しでも整合性を保つため警告的に扱う
         state["iteration"] = 0
@@ -79,7 +79,7 @@ def generate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
 
 
 def regenerate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
-    """再生成ノード。レビュー指摘を反映した上で再度LLMを実行する。"""
+    """再生成ノード。レビュー指摘を踏まえて書き直す。"""
     if state["iteration"] == 0:
         # 再生成なのに初回扱いにならないよう最低1回目として扱う
         state["iteration"] = 1
