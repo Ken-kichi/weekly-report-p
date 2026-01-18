@@ -425,13 +425,29 @@ LangGraphを使う場合、
 ~/Desktop $ cd weekly-report
 ~/Desktop/weekly-report $ uv init
 ~/Desktop/weekly-report $ uv venv
-~/Desktop/weekly-report $ touch cli.py build_graph.py state.py git_loader.py generator.py evaluator.py multi_evaluator.py
+~/Desktop/weekly-report $ touch cli.py  build_graph.py state.py git_loader.py generator.py evaluator.py multi_evaluator.py
+~/Desktop/ai-report-p $ source .venv/bin/activate
+(ai-report-p) ~/Desktop/ai-report-p $ uv add typer langchain langgraph openai langchain_openai python-dotenv
 ~/Desktop/weekly-report $ code .
 ```
 
 依存関係や詳細設定は、
 後続の章で必要になったタイミングで追加していきます。
 
+
+### .env の準備
+
+LLM API キーなどの秘密情報は `.env` で管理します。`generator.py` では `OPENAI_KEY` を参照しているため、以下のように設定してください。
+
+```env
+OPENAI_KEY="sk-..."  # 実際のAPIキーを設定
+```
+
+* `.env` は `.gitignore` に追加してリポジトリに含めない
+* プロジェクトごと・環境ごとに値を切り替える（例: `.env.production`）
+* CI/CDでは環境変数として直接注入してもよい
+
+`python-dotenv` を使ってアプリ起動時に自動ロードすると、ローカルでもCIでも同じ記述で動かせます。キーを平文で共有しないためにも `.env` 運用を徹底しましょう。
 
 
 次章では、
@@ -521,63 +537,62 @@ weekly-report generate
 この3点を満たしていれば、
 フレームワークは何でも構いません。
 
-```python
+```python:cli.py
 # cli.py
+"""Command line entrypoints for the weekly report generator."""
+
 import typer
-from typing import Optional, List
 
 app = typer.Typer(
     name="weekly-report",
-    help="git log から週報を自動生成するCLIツール",
+    help="CLI tool that generates weekly reports from git logs.",
 )
+
 
 @app.command()
 def generate(
-    since: Optional[str] = typer.Option(
+    since: str | None = typer.Option(
         None,
         "--since",
-        help="git log の取得開始日（例: 'last monday', '2024-01-01'）",
+        "-s",
+        help="Date or shortcut passed to git log --since (e.g. 'last monday').",
     ),
     max_iteration: int = typer.Option(
         3,
         "--max-iteration",
-        help="再生成の最大回数",
+        "-m",
+        help="Maximum number of regenerate cycles before aborting.",
     ),
-    repos: List[str] = typer.Option(
+    repos: list[str] = typer.Option(
         [],
         "--repo",
         "-r",
-        help="差分を取得するリポジトリパス（複数指定可）",
-    ),
+        help="Path(s) to git repositories to read (repeatable).",
+    )
 ):
-    """
-    今週分の作業ログから週報を生成する
-    """
-    typer.echo("🚀 Weekly report generation started")
-
+    # 週報生成フローを開始
+    """Generate a weekly report from one or more git repositories."""
+    typer.echo("Weekly report generation started.")
     from build_graph import run_graph
-
     run_graph(
         since=since,
         max_iteration=max_iteration,
         repos=repos,
     )
 
-    typer.echo("✅ Weekly report generation finished")
+    typer.echo("Weekly report generation finished.")
 
 
 @app.command()
 def evaluate(
     report_path: str = typer.Argument(
         ...,
-        help="評価対象の週報ファイルパス",
+        help="Path to an existing weekly report Markdown file.",
     )
 ):
-    """
-    既存の週報を評価する（再生成なし）
-    """
-    typer.echo(f"🔍 Evaluating report: {report_path}")
-
+    # 既存の週報に対して評価のみ実行
+    """Run the evaluator against an existing report file without regeneration."""
+    typer.echo(f"Evaluating report: {report_path}")
     from evaluator import evaluate_report_file
 
     result = evaluate_report_file(report_path)
@@ -588,10 +603,10 @@ def evaluate(
 
 
 def run():
-    """
-    main.py から呼ばれるエントリーポイント
-    """
+    # `python -m` から呼び出されるエントリーポイント
+    """Typer entrypoint used by python -m invocation."""
     app()
+
 
 ```
 
@@ -859,52 +874,55 @@ State設計が甘いと、次のような問題が起きます。
 ここでは、本記事で使う
 **WeeklyReportState の全体像**を示します。
 
-```python
+```python:state.py
 # state.py
-from typing import TypedDict, List, Optional
+"""TypedDict schemas that make LangGraph state explicit."""
+
+# LangGraph 全体で共有する状態構造を TypedDict で明示する
+
+from typing import TypedDict
 
 
 class ReviewResult(TypedDict):
-    """
-    単一評価者による評価結果
-    """
-    reviewer: str          # reviewer role (e.g. tech / manager / writer)
-    score: int             # 0〜100
-    feedback: str          # 改善コメント
+    """Score and feedback emitted by a single reviewer role."""
+
+    # 単一レビューアーが出力するメタ情報
+    reviewer: str  # reviewer role (e.g. tech / manager / writer)
+    score: int  # 0〜100
+    feedback: str  # 改善コメント
 
 
 class GitDiffEntry(TypedDict):
-    """
-    1リポジトリぶんの git log -p
-    """
+    """`git log -p` output captured for one repository path."""
+
+    # リポジトリパスとその差分テキストの組
     repo_path: str
     diff: str
 
 
 class WeeklyReportState(TypedDict):
-    """
-    LangGraph上で扱う週報生成の状態
-    """
+    """Canonical state shared across LangGraph nodes for weekly report generation."""
 
     # 入力
-    git_diffs: List[GitDiffEntry]  # リポジトリごとの差分
-    git_diff_text: str             # LLMに渡す連結済みテキスト
+    git_diffs: list[GitDiffEntry]  # リポジトリごとの差分（生データ）
+    git_diff_text: str  # LLMに渡す連結済みテキスト（見出し付き）
 
     # 生成物
-    report_draft: str              # 現在の週報ドラフト
+    report_draft: str  # 現在の週報ドラフト
 
     # 評価結果
-    reviews: List[ReviewResult]    # 各評価者の評価
-    average_score: float           # 平均スコア
+    reviews: list[ReviewResult]  # 各評価者の評価
+    average_score: float  # 平均スコア
 
     # 制御用
-    iteration: int                 # 現在の生成回数
-    max_iteration: int             # 最大生成回数
+    iteration: int  # 現在の生成回数
+    max_iteration: int  # 最大生成回数
 
     # 補助情報（任意）
-    selected_repos: List[str]      # CLIで指定されたリポジトリ一覧
-    since: Optional[str]           # git log の基準日
-    is_approved: bool              # 承認済みかどうか
+    selected_repos: list[str]  # CLIで指定されたリポジトリ一覧
+    since: str | None  # git log の基準日
+    is_approved: bool  # 承認済みかどうか
+
 
 ```
 
@@ -1119,24 +1137,26 @@ Stateが明確に定義されていれば、
 
 
 ### generator.py　実装コード
-```python
+```python:generator.py
+"""LLM-backed generator node that produces or rewrites weekly reports."""
+
 from langchain_openai import ChatOpenAI
-from langchain.schema import SystemMessage, HumanMessage
-
+from langchain_core.messages import HumanMessage, SystemMessage
 from state import WeeklyReportState
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
 
-# LLMは生成専用なので temperature を少し高めにする
 llm = ChatOpenAI(
-    model="gpt-4o-mini",
-    temperature=0.7,
+    model="gpt-5",
+    api_key=os.getenv("OPENAI_KEY")
 )
 
 
 def _build_prompt(state: WeeklyReportState) -> list:
-    """
-    iteration に応じてプロンプトを切り替える
-    """
+    """Construct the system/human prompts depending on iteration count."""
+    # iteration 0 は初回生成、以降は再生成として扱う
     if state.iteration == 0:
         system_prompt = """
 あなたは優秀なソフトウェアエンジニアです。
@@ -1157,7 +1177,6 @@ def _build_prompt(state: WeeklyReportState) -> list:
 - 課題・懸念点
 """
     else:
-        # 再生成時は「評価フィードバック」を必ず含める
         system_prompt = """
 あなたはレビュー指摘を的確に反映できるシニアエンジニアです。
 前回の週報を改善してください。
@@ -1172,28 +1191,22 @@ def _build_prompt(state: WeeklyReportState) -> list:
 上記の指摘をすべて反映し、
 より完成度の高い週報に書き直してください。
 """
-
-    return [
-        SystemMessage(content=system_prompt.strip()),
-        HumanMessage(content=human_prompt.strip()),
-    ]
+        return [
+            SystemMessage(content=system_prompt.strip()),
+            HumanMessage(content=human_prompt.strip())
+        ]
 
 
 def generate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
-    """
-    LangGraph のノードとして使われる生成関数
-    """
+    """LangGraph node that invokes the LLM and updates the report draft."""
+    # プロンプトを組み立てて LLM を呼び出す
     messages = _build_prompt(state)
-
     response = llm.invoke(messages)
-
     state.report_draft = response.content
-
-    # iteration は build_graph 側で加算してもよいが、
-    # 生成フェーズで進めたい場合はここでもOK
+    # 生成回数をインクリメントしてループ制御に使う
     state.iteration += 1
-
     return state
+
 
 ```
 
@@ -1261,8 +1274,10 @@ LLMには **「読みやすい1つのテキスト」** を渡したいところ�
 そこで `git_loader.py` ではリポジトリごとに `git log -p` を取得し、
 見出しを付けて連結します。
 
-```python
+```python:git_loader.py
 # git_loader.py
+"""Utility node that fetches git diffs for every requested repository."""
+
 from pathlib import Path
 import subprocess
 
@@ -1270,10 +1285,13 @@ from state import WeeklyReportState
 
 
 def load_git_diff(state: WeeklyReportState) -> WeeklyReportState:
+    """Populate `git_diffs` and `git_diff_text` based on the repositories in state."""
+    # CLIで指定されたリポジトリがなければカレントディレクトリを対象にする
     repo_paths = state.selected_repos or [str(Path.cwd())]
 
     diffs = []
     for repo in repo_paths:
+        # リポジトリごとに log -p を実行し raw diff を取得
         repo_path = Path(repo).expanduser().resolve()
         cmd = [
             "git",
@@ -1285,23 +1303,30 @@ def load_git_diff(state: WeeklyReportState) -> WeeklyReportState:
         if state.since:
             cmd.extend(["--since", state.since])
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True
+        )
         diffs.append(
             {
                 "repo_path": str(repo_path),
-                "diff": result.stdout.strip(),
+                "diff": result.stdout.strip()
             }
         )
-
     stitched = "\n\n".join(
         f"### Repository: {Path(entry['repo_path']).name}\n{entry['diff']}"
         for entry in diffs
-        if entry["diff"]
+        if entry['diff']
     )
 
+    # LangGraph状態へ diff の生データと LLM向けテキストの両方を保存
     state.git_diffs = diffs
     state.git_diff_text = stitched.strip()
     return state
+
+
 ```
 
 この段階では整形せず「どのリポジトリのログかだけ分かる」ようにするのがポイントです。
@@ -1438,22 +1463,28 @@ def load_git_diff(state: WeeklyReportState) -> WeeklyReportState:
 
 
 ## evaluator.py　実装コード
-```python
-from langchain_openai import ChatOpenAI
-from langchain.schema import SystemMessage, HumanMessage
-import re
+```python:evaluator.py
+# evaluator.py
+"""LLM-based evaluator that scores generated reports."""
 
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
+import re
+from dotenv import load_dotenv
+import os
 from state import WeeklyReportState
 
+load_dotenv()
 
-# 評価はブレない方がいいので temperature は低め
 llm = ChatOpenAI(
-    model="gpt-4o-mini",
-    temperature=0.0,
+    model="gpt-5",
+    api_key=os.getenv("OPENAI_KEY")
 )
 
 
 def _build_prompt(state: WeeklyReportState) -> list:
+    """Create the evaluation prompt demanding a numeric score and feedback."""
+    # 評価観点と出力フォーマットを厳密に指定
     system_prompt = """
 あなたは厳密で公平なレビュー担当者です。
 以下の週報をレビューし、必ず数値評価を行ってください。
@@ -1466,7 +1497,6 @@ def _build_prompt(state: WeeklyReportState) -> list:
 
 各観点を総合して、0〜100点でスコアをつけてください。
 """
-
     human_prompt = f"""
 【週報本文】
 {state.report_draft}
@@ -1478,41 +1508,34 @@ Feedback:
 - 指摘2
 - 指摘3
 """
-
     return [
         SystemMessage(content=system_prompt.strip()),
-        HumanMessage(content=human_prompt.strip()),
+        HumanMessage(content=human_prompt.strip())
     ]
 
 
 def _parse_score(text: str) -> int:
-    """
-    LLM出力から Score を抽出する
-    """
-    match = re.search(r"Score:\s*(\d+)", text)
+    """Extract an integer score from the evaluator LLM output."""
+    # LLM出力からスコアを抽出し、0〜100にクリップ
+    match = re.search(f"Score:\s*(\d+)", text)
     if not match:
         raise ValueError("Score が見つかりません")
-
     score = int(match.group(1))
-    return max(0, min(score, 100))
+    return max(0, min(100, score))
 
 
 def evaluate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
-    """
-    LangGraph の評価ノード
-    """
+    """Run the evaluator chain, append the review, and update the score."""
+    # 評価を実行し、Stateへスコアとフィードバックを保存
     messages = _build_prompt(state)
     response = llm.invoke(messages)
-
     content = response.content
-
     score = _parse_score(content)
 
-    # State を更新
     state.reviews.append(content)
-    state.average_score = score
-
+    state.averate_score = score
     return state
+
 
 ```
 
@@ -1772,22 +1795,25 @@ Stateには、
 1つの判断に落とすかを解説します。
 
 ## multi_evaluator.py　実装コード
-```python
-from langchain_openai import ChatOpenAI
-from langchain.schema import SystemMessage, HumanMessage
-import re
-from typing import List
+```python:multi_evaluator.py
+# multi_evaluator.py
+"""Multiple-role evaluator that aggregates weighted review scores."""
 
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
+import re
+from dotenv import load_dotenv
+import os
 from state import WeeklyReportState
 
+load_dotenv()
 
-# 評価は安定重視
 llm = ChatOpenAI(
-    model="gpt-4o-mini",
-    temperature=0.0,
+    model="gpt-5",
+    api_key=os.getenv("OPENAI_KEY")
 )
 
-
+# 重み付きで評価するロールの定義
 REVIEWERS = [
     {
         "name": "tech",
@@ -1817,6 +1843,7 @@ REVIEWERS = [
 
 
 def _build_prompt(system_prompt: str, report: str) -> list:
+    """Create the per-role evaluation prompt with a fixed output format."""
     human_prompt = f"""
 【週報本文】
 {report}
@@ -1835,63 +1862,63 @@ Feedback:
 
 
 def _parse_score(text: str) -> int:
-    match = re.search(r"Score:\s*(\d+)", text)
+    """Extract and clamp the integer score returned by a reviewer LLM."""
+    match = re.search(f"Score:\s*(\d+)", text)
     if not match:
         raise ValueError("Score が見つかりません")
-
     score = int(match.group(1))
-    return max(0, min(score, 100))
+    return max(0, min(100, score))
 
 
 def _evaluate_by_role(role: dict, report: str) -> dict:
+    """Run the LLM for a single reviewer role and return the structured result."""
     messages = _build_prompt(
         system_prompt=role["system_prompt"],
-        report=report,
+        report=report
     )
 
     response = llm.invoke(messages)
     content = response.content
-
     score = _parse_score(content)
 
     return {
         "role": role["name"],
         "score": score,
         "weight": role["weight"],
-        "feedback": content,
+        "feedback": content
     }
 
 
 def multi_evaluate_weekly_report(
-    state: WeeklyReportState,
+        state: WeeklyReportState
 ) -> WeeklyReportState:
-    """
-    LangGraph 用・複数評価統合ノード
-    """
-    results: List[dict] = []
+    """Iterate through all reviewers, aggregate weighted scores, store feedback."""
+    results: list[dict] = []
 
     for role in REVIEWERS:
+        # ロールごとに独立して評価を実行
         result = _evaluate_by_role(
             role=role,
-            report=state.report_draft,
+            report=state.report_draft
         )
         results.append(result)
 
-    # 加重平均スコア
-    weighted_score = sum(
-        r["score"] * r["weight"] for r in results
-    )
+        # 重み付き平均で総合スコアを算出
+        weighted_socre = sum(
+            r["score"] * r["weight"] for r in results
+        )
 
-    # State 更新
-    state.average_score = round(weighted_score)
-    state.reviews.extend(
-        [
-            f"[{r['role'].upper()} REVIEW]\n{r['feedback']}"
-            for r in results
-        ]
-    )
+        state.average_socre = round(weighted_socre)
+        # レビュー結果は再生成プロンプトなどで再利用する
+        state.reviews.extend(
+            [
+                f"[{r['role'].upper()} REVIEW]\n{r['feedback']}"
+                for r in results
+            ]
+        )
 
-    return state
+        return state
+
 
 ```
 
@@ -2177,7 +2204,10 @@ LangGraphを使う最大の価値の1つです。
 * 「再生成ループ」が**自然に読める構造**にする
 
 ## build_graph.py　実装コード
-```python
+```python:build_graph.py
+# build_graph.py
+"""LangGraph wiring for the weekly report generation workflow."""
+
 from langgraph.graph import StateGraph, END
 
 from state import WeeklyReportState
@@ -2186,14 +2216,8 @@ from generator import generate_weekly_report, regenerate_weekly_report
 from multi_evaluator import multi_evaluate_weekly_report
 
 
-# -
-# 条件分岐ロジック
-# -
-
 def should_continue(state: WeeklyReportState) -> str:
-    """
-    評価後に次へ進むかを判定する
-    """
+    """評価結果と試行回数に応じて次の遷移を返す。"""
     if state.average_score >= 80:
         return "approve"
 
@@ -2203,33 +2227,32 @@ def should_continue(state: WeeklyReportState) -> str:
     return "regenerate"
 
 
-# -
-# Graph 構築
-# -
-
 def build_graph():
+    """週報生成フローの StateGraph を構築して返す。"""
     graph = StateGraph(WeeklyReportState)
 
-    #  ノード定義
+    # 各ノードをグラフに登録
     graph.add_node("load_git", load_git_diff)
     graph.add_node("generate", generate_weekly_report)
     graph.add_node("regenerate", regenerate_weekly_report)
     graph.add_node("evaluate", multi_evaluate_weekly_report)
 
-    #  エッジ定義
+    # エントリーポイントを設定
     graph.set_entry_point("load_git")
 
+    # 直列の遷移
     graph.add_edge("load_git", "generate")
     graph.add_edge("generate", "evaluate")
 
+    # 評価結果に基づく条件分岐
     graph.add_conditional_edges(
         "evaluate",
         should_continue,
         {
             "approve": END,
             "regenerate": "regenerate",
-            "stop": END,
-        },
+            "stop": END
+        }
     )
 
     graph.add_edge("regenerate", "evaluate")
@@ -2237,20 +2260,15 @@ def build_graph():
     return graph.compile()
 
 
-# -
-# CLI から呼ばれる実行関数
-# -
-
 def run_graph(
-    since: str | None = None,
-    max_iteration: int = 3,
-    repos: list[str] | None = None,
+        since: str | None = None,
+        max_iteration: int = 3,
+        repos: list[str] | None = None
 ):
-    """
-    CLI 用の実行ラッパー
-    """
+    """CLI などから呼ばれる実行ラッパー。"""
     graph = build_graph()
 
+    # LangGraph 初期状態
     initial_state = WeeklyReportState(
         git_diffs=[],
         git_diff_text="",
@@ -2264,9 +2282,11 @@ def run_graph(
         is_approved=False,
     )
 
+    # 実際にグラフを実行
     final_state = graph.invoke(initial_state)
 
     return final_state
+
 
 ```
 
@@ -2457,7 +2477,7 @@ Average: 80.0 → APPROVED
 
 
 ## main.py 実装コード
-```python
+```python:main.py
 # main.py
 
 from cli import run
@@ -2470,6 +2490,7 @@ def main():
 if __name__ == "__main__":
     main()
 
+
 ```
 
 
@@ -2480,8 +2501,13 @@ if __name__ == "__main__":
 ### CLI実行
 
 ```
-$ python run_weekly_report.py
+$ uv run main.py generate \
+    --since "last monday" \
+    --repo ~/work/service-a \
+    --repo ~/work/service-b
 ```
+
+`main.py` では Typer CLI をそのまま呼び出しているため、`uv run main.py` で `generate` / `evaluate` などのコマンドを指定します（サブコマンドなしで実行すると Typer が「Missing command」とエラーを返します）。
 
 ### 出力（Attempt 1）
 

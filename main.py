@@ -1,5 +1,8 @@
+from cli import run
+
+
 def main():
-    print("Hello from ai-report-p!")
+    run()
 
 
 if __name__ == "__main__":
