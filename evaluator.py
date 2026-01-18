@@ -68,3 +68,23 @@ def evaluate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
     state["reviews"].append(content)
     state["average_score"] = score
     return state
+
+
+def evaluate_report_file(report_path: str) -> dict:
+    """Evaluate an existing report file and return the score and feedback."""
+    # 既存の週報ファイルを評価し、スコアとフィードバックを返す
+    with open(report_path, "r", encoding="utf-8") as f:
+        report_content = f.read()
+
+    state = WeeklyReportState(
+        report_draft=report_content,
+        reviews=[],
+        average_score=0,
+    )
+
+    evaluated_state = evaluate_weekly_report(state)
+
+    return {
+        "score": evaluated_state["average_score"],
+        "feedback": evaluated_state["reviews"][-1],
+    }

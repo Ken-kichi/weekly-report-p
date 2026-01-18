@@ -2,7 +2,7 @@
 
 from pathlib import Path
 import subprocess
-
+import typer
 from state import WeeklyReportState
 
 LOG_PREFIX = "[load_git]"
@@ -12,13 +12,14 @@ def load_git_diff(state: WeeklyReportState) -> WeeklyReportState:
     """Populate `git_diffs` and `git_diff_text` based on the repositories in state."""
     # CLIで指定されたリポジトリがなければカレントディレクトリを対象にする
     repo_paths = state["selected_repos"] or [str(Path.cwd())]
-    print(f"{LOG_PREFIX} fetching diffs from {len(repo_paths)} repo(s)...")
+    typer.echo(
+        f"{LOG_PREFIX} fetching diffs from {len(repo_paths)} repo(s)...")
 
     diffs = []
     for repo in repo_paths:
         # リポジトリごとに log -p を実行し raw diff を取得
         repo_path = Path(repo).expanduser().resolve()
-        print(f"{LOG_PREFIX} running git log -p in {repo_path}")
+        typer.echo(f"{LOG_PREFIX} running git log -p in {repo_path}")
         cmd = [
             "git",
             "-C",
@@ -50,5 +51,6 @@ def load_git_diff(state: WeeklyReportState) -> WeeklyReportState:
     # LangGraph状態へ diff の生データと LLM向けテキストの両方を保存
     state["git_diffs"] = diffs
     state["git_diff_text"] = stitched.strip()
-    print(f"{LOG_PREFIX} collected {len([d for d in diffs if d['diff']])} repo diffs")
+    typer.echo(
+        f"{LOG_PREFIX} collected {len([d for d in diffs if d['diff']])} repo diffs")
     return state

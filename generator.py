@@ -13,8 +13,6 @@ llm = ChatOpenAI(
     api_key=os.getenv("OPENAI_KEY")
 )
 
-LOG_PREFIX = "[generate]"
-
 
 def _build_prompt(state: WeeklyReportState) -> list:
     """Construct the system/human prompts depending on iteration count."""
@@ -67,7 +65,6 @@ def _invoke_llm(state: WeeklyReportState) -> WeeklyReportState:
     state["report_draft"] = response.content
     # 生成回数をインクリメントしてループ制御に使う
     state["iteration"] += 1
-    print(f"{LOG_PREFIX} LLM produced draft (iteration={state['iteration']})")
     return state
 
 
@@ -76,7 +73,8 @@ def generate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
     if state["iteration"] != 0:
         # 予期せぬ呼び出しでも整合性を保つため警告的に扱う
         state["iteration"] = 0
-    print(f"{LOG_PREFIX} initial draft generation started")
+    next_iter = state["iteration"] + 1
+    print(f"[{next_iter}/{state['max_iteration']}] Generate report (initial)")
     return _invoke_llm(state)
 
 
@@ -85,5 +83,6 @@ def regenerate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
     if state["iteration"] == 0:
         # 再生成なのに初回扱いにならないよう最低1回目として扱う
         state["iteration"] = 1
-    print(f"{LOG_PREFIX} regeneration (iteration={state['iteration']}) started")
+    next_iter = state["iteration"] + 1
+    print(f"[{next_iter}/{state['max_iteration']}] Regenerate report with feedback")
     return _invoke_llm(state)

@@ -14,8 +14,6 @@ llm = ChatOpenAI(
     api_key=os.getenv("OPENAI_KEY")
 )
 
-LOG_PREFIX = "[evaluate]"
-
 # 重み付きで評価するロールの定義
 REVIEWERS = [
     {
@@ -105,7 +103,7 @@ def multi_evaluate_weekly_report(
             report=state["report_draft"]
         )
         results.append(result)
-        print(f"{LOG_PREFIX} {role['name']} score={result['score']}")
+        print(f"[Review:{role['name']}] Score: {result['score']}")
 
     # 重み付き平均で総合スコアを算出
     weighted_socre = sum(
@@ -120,6 +118,14 @@ def multi_evaluate_weekly_report(
             for r in results
         ]
     )
-    print(f"{LOG_PREFIX} weighted average score={state['average_score']}")
+    print(f"[Review] Score: {state['average_score']}")
+
+    if state["average_score"] >= 80:
+        print("→ ACCEPT")
+    elif state["iteration"] >= state["max_iteration"]:
+        print("→ STOP (max iteration reached)")
+    else:
+        print("→ REJECT (below 80)")
+    print()
 
     return state
