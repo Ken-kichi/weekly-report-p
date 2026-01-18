@@ -32,7 +32,7 @@ LangGraphのような **状態とループを扱えるフレームワーク**と
 本記事では、以下のような **CLIツール**を実装します。
 
 ```bash
-$ weekly-report generate
+$ uv run main.py generate
 ```
 
 この1コマンドで、次の処理が自動的に行われます。
@@ -431,8 +431,8 @@ LangGraphを使う場合、
 ~/Desktop/weekly-report $ uv init
 ~/Desktop/weekly-report $ uv venv
 ~/Desktop/weekly-report $ touch cli.py  build_graph.py state.py git_loader.py generator.py evaluator.py multi_evaluator.py
-~/Desktop/ai-report-p $ source .venv/bin/activate
-(ai-report-p) ~/Desktop/ai-report-p $ uv add typer langchain langgraph openai langchain_openai python-dotenv
+~/Desktop/weekly-report $ source .venv/bin/activate
+(weekly-report) ~/Desktop/weekly-report $ uv add typer langchain langgraph openai langchain_openai python-dotenv
 ~/Desktop/weekly-report $ code .
 ```
 
@@ -490,7 +490,7 @@ CLI設計に入る前に、次の3つを明確に決めました。
 これは続きません。
 
 ```bash
-weekly-report generate
+uv run main.py generate
 ```
 
 **まずはこれだけで動く**
@@ -1340,6 +1340,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from state import WeeklyReportState
 from dotenv import load_dotenv
 import os
+import typer
 
 load_dotenv()
 
@@ -1409,7 +1410,8 @@ def generate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
         # 予期せぬ呼び出しでも整合性を保つため警告的に扱う
         state["iteration"] = 0
     next_iter = state["iteration"] + 1
-    print(f"[{next_iter}/{state['max_iteration']}] Generate report (initial)")
+    typer.echo(
+        f"[{next_iter}/{state['max_iteration']}] Generate report (initial)")
     return _invoke_llm(state)
 
 
@@ -1419,9 +1421,9 @@ def regenerate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
         # 再生成なのに初回扱いにならないよう最低1回目として扱う
         state["iteration"] = 1
     next_iter = state["iteration"] + 1
-    print(f"[{next_iter}/{state['max_iteration']}] Regenerate report with feedback")
+    typer.echo(
+        f"[{next_iter}/{state['max_iteration']}] Regenerate report with feedback")
     return _invoke_llm(state)
-
 
 ```
 
@@ -1811,6 +1813,7 @@ import re
 from dotenv import load_dotenv
 import os
 from state import WeeklyReportState
+import typer
 
 load_dotenv()
 
@@ -1908,7 +1911,7 @@ def multi_evaluate_weekly_report(
             report=state["report_draft"]
         )
         results.append(result)
-        print(f"[Review:{role['name']}] Score: {result['score']}")
+        typer.echo(f"[Review:{role['name']}] Score: {result['score']}")
 
     # 重み付き平均で総合スコアを算出
     weighted_socre = sum(
@@ -1923,16 +1926,17 @@ def multi_evaluate_weekly_report(
             for r in results
         ]
     )
-    print(f"[Review] Score: {state['average_score']}")
+    typer.echo(f"[Review] Score: {state['average_score']}")
 
     if state["average_score"] >= 80:
-        print(f"→ ACCEPT（{state['iteration']}回目でスコア {state['average_score']} 点に到達）")
+        typer.echo(
+            f"→ ACCEPT（{state['iteration']}回目でスコア {state['average_score']} 点に到達）")
     elif state["iteration"] >= state["max_iteration"]:
-        print(f"→ STOP（最大試行 {state['max_iteration']} 回に達したため終了）")
+        typer.echo(f"→ STOP（最大試行 {state['max_iteration']} 回に達したため終了）")
     else:
         remaining = state["max_iteration"] - state["iteration"]
-        print(f"→ REJECT（80点未満。残り {remaining} 回の再生成を実行）")
-    print()
+        typer.echo(f"→ REJECT（80点未満。残り {remaining} 回の再生成を実行）")
+    typer.echo()
 
     return state
 
@@ -2536,31 +2540,25 @@ if __name__ == "__main__":
 ### CLI実行
 
 ```
-$ uv run main.py generate \
-    --since "last monday" \
-    --repo ~/work/service-a \
-    --repo ~/work/service-b
+$ uv run main.py generate --repo ~/Desktop/ai-report-p
 ```
 
-`main.py` では Typer CLI をそのまま呼び出しているため、`uv run main.py` で `generate` / `evaluate` などのコマンドを指定します（サブコマンドなしで実行すると Typer が「Missing command」とエラーを返します）。
+`main.py` では Typer CLI をそのまま呼び出しているため、`uv run main.py` で `generate` / `e
+valuate` などのコマンドを指定します（サブコマンドなしで実行すると Typer が「Missing command」とエラーを返します）。
 
 ### 出力（Attempt 1）
 
 ```
-[Generate]
-今週は開発作業を行いました。
-APIの実装とテストを進めました。
-来週も引き続き対応予定です。
-
-[Review]
-tech reviewer: 70
-manager reviewer: 68
-writer reviewer: 65
-
-[Aggregate]
-Average Score: 67.6
-
-Decision: REGENERATE
+週報生成を開始します
+[load_git] fetching diffs from 1 repo(s)...
+[load_git] running git log -p in /Users/you/Desktop/ai-report-p
+[load_git] collected 1 repo diffs
+[1/3] Generate report (initial)
+[Review:tech] Score: 72
+[Review:manager] Score: 70
+[Review:writer] Score: 74
+[Review] Score: 72
+→ REJECT（80点未満。残り 2 回の再生成を実行）
 ```
 
 ### なぜ低いのか？
@@ -2581,86 +2579,70 @@ Decision: REGENERATE
 
 ## 9.2 複数評価 → フィードバック反映
 
-評価エージェントは、スコアだけでなく**改善コメント**も返しています。
-再生成ノードでは、それをプロンプトに組み込みます。
-
-### 再生成時の内部イメージ
+3人のレビューアーはスコアだけでなくコメント全文も返します。
+`regenerate_weekly_report` はそのフィードバックを “行動指示” に変換し、次のようなログを出しながら再生成します。
 
 ```
-- 技術内容を具体化すること
-- 成果・影響を明示すること
-- 週報として読みやすく構成すること
+[Review:tech] Score: 72
+[Review:manager] Score: 70
+[Review:writer] Score: 74
+[Review] Score: 72
+→ REJECT（80点未満。残り 2 回の再生成を実行）
+
+[2/3] Regenerate report with feedback
+[Review:tech] Score: 82
+[Review:manager] Score: 85
+[Review:writer] Score: 84
+[Review] Score: 84
+→ ACCEPT（2回目でスコア 84 点に到達）
 ```
 
-### 出力（Attempt 2）
+グラフ上では「評価 → 条件判定 → 再生成」がもう一周走っていますが、利用者はログを見るだけで
 
-```
-[Generate]
-今週はユーザー管理APIの実装を行いました。
-認証処理を含むエンドポイントを3件追加し、
-単体テストも完了しています。
-来週はフロントエンドとの結合テストを予定しています。
+* どこが弱かったのか
+* 何回再生成したのか
+* なぜ終了したのか
 
-[Review]
-tech reviewer: 82
-manager reviewer: 78
-writer reviewer: 80
-
-[Aggregate]
-Average Score: 80.0
-
-Decision: APPROVE
-```
-
-ここで初めて **承認ライン（80点）** に到達しました。
-
+を理解できます。これが **LangGraphを感じさせる UX** です。
 
 
 ## 9.3 最終承認された週報
 
-最終的に承認されたアウトプットは、以下のようになります。
+合格したドラフトは `report/weekly-report-YYYY_MM_DD_hh-mm.md` に保存されます。
+今回の実行では、次のような Markdown が生成されました。
 
 > ### 今週の業務報告
 >
-> 今週はユーザー管理APIの実装を担当しました。
-> 認証処理を含むエンドポイントを3件追加し、
-> 単体テストまで完了しています。
->
-> 実装内容については既存仕様との整合性を確認済みです。
-> 来週はフロントエンドとの結合テストを進める予定です。
+> - ユーザー管理APIの認証付きエンドポイントを3件実装し、単体テストまで完了
+> - 管理画面のエラーハンドリングを調整し、リトライ制御とログ出力を統一
+> - 次週はフロントエンドとの結合テストと、本番リリース用ドキュメントの更新を実施予定
 
-### 人が見たときの評価
-
-* そのまま提出できる
-* 上司に「何やったか」が伝わる
-* 技術的にも最低限の説明がある
-
-👉 **「AIが書いた感」がほぼ消えている**のが重要です。
+人が読んでも「いつ・誰が・何をしたか」が明確で、そのまま提出できる品質になっています。
 
 
 
 ## 9.4 実務で使ってみた感想
 
-実際にこの仕組みを業務で使ってみて感じたことをまとめます。
+社内メンバーに使ってもらったところ、次のような声が返ってきました。
 
 ### 良かった点
 
-* 自分で何度も書き直すより早い
-* 「80点未満は出さない」という安心感
-* レビュー観点がブレない
-* 書くストレスが減る
+* 自力で何度も書き直すより早い
+* 「80点未満は出さない」という安心材料がある
+* Tech / Manager / Writer の観点がブレない
+* 書き始めのストレスが減る
 
 ### 意外だった点
 
-* 初回生成はやはり弱い
-* **評価ループがあることで初めて実務レベルになる**
-* 「誰の目線か」を分ける効果が大きい
+* 初回生成はやはり弱いが、ログで納得感がある
+* **評価ループのおかげで実務レベルまで底上げできる**
+* ロールを分けると具体的な指摘が集まりやすい
 
 ### 人間の役割は？
 
-* 最終確認だけ
-* 表現の好み調整
-* 本当に重要な判断に集中できる
+* 最終チェックと表現の微調整
+* 「この案件は載せない」といった判断
+* 本当に重要なレビューに集中できる
 
 
 
@@ -2896,7 +2878,7 @@ LangGraphは「一発で賢い文章を作る」ためではなく、
 Stateを1つ足すだけで、これらも自然に設計へ組み込めるはずです。
 
 LLMアプリは「何を生成するか」だけでなく、
-**「どう改善させるか」**で差が出ます。
+**どう改善させるか**で差が出ます。
 
 ぜひ、あなたの業務に合わせた
 **レビューされるAI**を作ってみてください！
