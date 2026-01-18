@@ -33,12 +33,13 @@ def generate(
     """Generate a weekly report from one or more git repositories."""
     typer.echo("Weekly report generation started.")
     from build_graph import run_graph
-    run_graph(
+    _, report_path = run_graph(
         since=since,
         max_iteration=max_iteration,
         repos=repos,
     )
 
+    typer.echo(f"Weekly report saved to {report_path}")
     typer.echo("Weekly report generation finished.")
 
 

@@ -1,5 +1,8 @@
 """LangGraph wiring for the weekly report generation workflow."""
 
+from datetime import datetime
+from pathlib import Path
+
 from langgraph.graph import StateGraph, END
 
 from state import WeeklyReportState
@@ -52,6 +55,21 @@ def build_graph():
     return graph.compile()
 
 
+def _save_report(state: WeeklyReportState) -> Path:
+    """report/ ディレクトリに Markdown レポートを保存する。"""
+    output_dir = Path("report")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y_%m_%d_%H-%M")
+    filename = f"weekly-report-{timestamp}.md"
+    report_path = output_dir / filename
+
+    content = (state["report_draft"] or "").strip()
+    report_path.write_text(content + ("\n" if content else ""), encoding="utf-8")
+
+    return report_path
+
+
 def run_graph(
         since: str | None = None,
         max_iteration: int = 3,
@@ -77,4 +95,6 @@ def run_graph(
     # 実際にグラフを実行
     final_state = graph.invoke(initial_state)
 
-    return final_state
+    report_path = _save_report(final_state)
+
+    return final_state, report_path
