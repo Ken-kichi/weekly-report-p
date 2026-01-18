@@ -300,13 +300,14 @@ LangGraphは、
 
 まずは、処理の流れをシンプルに分解します。
 
-今回の週報生成は、以下の5ステップで構成されています。
+今回の週報生成は、以下の6ステップで構成されています。
 
 1. **git log 取得**
 2. **週報の下書き生成**
 3. **複数エージェントによる評価**
 4. **スコア判定（合否）**
 5. **必要に応じた再生成ループ**
+6. **合格した週報を Markdown で保存**
 
 重要なのは、
 「生成 → 評価 → 終了」では終わらない点です。
@@ -361,7 +362,8 @@ weekly-report/
 ├── git_loader.py    # git log取得
 ├── generator.py     # 週報生成
 ├── evaluator.py     # 評価ロジック
-└── multi_evaluator.py # 複数評価統合
+├── multi_evaluator.py # 複数評価統合
+└── report/          # 生成済み週報(Markdown)の保存先
 ```
 
 この構成で意識しているのは、
@@ -390,7 +392,10 @@ weekly-report/
   → 評価とスコア算出のみを担当
 
 * **build_graph.py**
-  → これらを“仕事の流れ”として接続
+  → これらを“仕事の流れ”として接続し、最終的な週報を `report/weekly-report-YYYY_MM_DD_hh-mm.md` に保存する
+
+* **report/**
+  → CLI実行ごとに生成される週報Markdownを時刻付きで貯める出力フォルダ（Git管理から除外）
 
 
 
@@ -539,13 +544,13 @@ weekly-report generate
 
 ```python:cli.py
 # cli.py
-"""Command line entrypoints for the weekly report generator."""
+"""週報ジェネレーター用の CLI エントリーポイント。"""
 
 import typer
 
 app = typer.Typer(
     name="weekly-report",
-    help="CLI tool that generates weekly reports from git logs.",
+    help="git log から週報を自動生成する CLI ツール",
 )
 
 
@@ -555,31 +560,32 @@ def generate(
         None,
         "--since",
         "-s",
-        help="Date or shortcut passed to git log --since (e.g. 'last monday').",
+        help="git log --since に渡す日付/ショートカット（例: 'last monday'）",
     ),
     max_iteration: int = typer.Option(
         3,
         "--max-iteration",
         "-m",
-        help="Maximum number of regenerate cycles before aborting.",
+        help="再生成の最大回数（超えると強制終了）",
     ),
     repos: list[str] = typer.Option(
         [],
         "--repo",
         "-r",
-        help="Path(s) to git repositories to read (repeatable).",
+        help="git log を取得するリポジトリパス（複数指定可）",
     )
 ):
     # 週報生成フローを開始
-    """Generate a weekly report from one or more git repositories."""
-    typer.echo("Weekly report generation started.")
+    """指定リポジトリから週報を生成する"""
+    typer.echo("週報生成を開始します")
     from build_graph import run_graph
-    run_graph(
+    _, report_path = run_graph(
         since=since,
         max_iteration=max_iteration,
         repos=repos,
     )
 
+    typer.echo(f"Weekly report saved to {report_path}")
     typer.echo("Weekly report generation finished.")
 
 
@@ -587,11 +593,11 @@ def generate(
 def evaluate(
     report_path: str = typer.Argument(
         ...,
-        help="Path to an existing weekly report Markdown file.",
+        help="評価対象の週報 Markdown ファイルパス",
     )
 ):
     # 既存の週報に対して評価のみ実行
-    """Run the evaluator against an existing report file without regeneration."""
+    """既存の週報ファイルのみを評価する"""
     typer.echo(f"Evaluating report: {report_path}")
     from evaluator import evaluate_report_file
 
@@ -604,9 +610,8 @@ def evaluate(
 
 def run():
     # `python -m` から呼び出されるエントリーポイント
-    """Typer entrypoint used by python -m invocation."""
+    """`python -m` で呼び出される Typer エントリーポイント。"""
     app()
-
 
 ```
 
@@ -615,20 +620,20 @@ def run():
 コマンドはあえて **最小構成** にしています。
 
 ```bash
-weekly-report generate
-weekly-report generate --since last-monday
-weekly-report generate --repo ~/work/service-a --repo ~/work/service-b
-weekly-report evaluate report.md
+uv run main.py generate
+uv run main.py generate --since last-monday
+uv run main.py generate --repo ~/work/service-a --repo ~/work/service-b
+uv run main.py evaluate report/weekly-report-2026_01_18_09-51.md
 ```
 
 
 
-### `weekly-report generate`
+### 週報の基本的な作成方法
 
 もっとも基本となるコマンドです。
 
 ```bash
-weekly-report generate
+uv run main.py generate
 ```
 
 このコマンドは内部で、
@@ -647,7 +652,7 @@ CLIではなく **StateとGraphに任せる**設計です。
 ### `--since` オプション
 
 ```bash
-weekly-report generate --since last-monday
+uv run main.py generate --since last-monday
 ```
 
 * 先週分をまとめたい
@@ -669,7 +674,7 @@ weekly-report generate --since last-monday
 ### 複数リポジトリ指定（`--repo` / `-r`）
 
 ```bash
-weekly-report generate \
+uv run main.py generate \
   --repo ~/work/service-a \
   --repo ~/work/service-b
 ```
@@ -684,102 +689,61 @@ weekly-report generate \
 LangGraphの構造を変えずに入力だけを拡張できます。
 
 
-### `weekly-report evaluate report.md`
+### 週報を評価する
 
 ```bash
-weekly-report evaluate report.md
+uv run main.py evaluate report/weekly-report-2026_01_18_09-51.md
 ```
 
-このコマンドは、
+このコマンドは保存済みの Markdown を読み込み、
+合否判定だけを行いたいときに使います（`--repo` や `--since` は指定できません）。
+生成と評価を分離することで、
 
-* すでにある週報を評価したい
-* 修正前後で点数を比べたい
+* LLMに再生成させずに、人間が修正したファイルを再評価できる
+* 過去の週報を振り返り、品質をスコアで揃えられる
 
-ときに使います。
-
-生成と評価を分けることで、
-
-* LLMの使い回し
-* 人間による修正との併用
-
-がしやすくなります。
+といった使い方が可能になります。
 
 
 
 ## 3.4 LangGraphを“感じさせる”ログ設計
 
-LangGraphの価値は、
-**ログを見た瞬間に分かる**のが理想です。
-
-
-
-### 実際のログイメージ
+CLIを実行すると、LangGraphの状態遷移がそのままログに流れます。
 
 ```text
 [1/3] Generate report (initial)
+[Review:tech] Score: 72
+[Review:manager] Score: 70
+[Review:writer] Score: 74
 [Review] Score: 72
-→ REJECT (below 80)
+→ REJECT（80点未満。残り 2 回の再生成を実行）
 
 [2/3] Regenerate report with feedback
+...
 [Review] Score: 81
-→ ACCEPT
+→ ACCEPT（2回目でスコア 81 点に到達）
 ```
 
-このログだけで、
-
-* 評価ループが回っている
-* 判断基準が明確
-* 無駄な再生成をしていない
-
-ことが伝わります。
-
-
-
-### 「何をしているか」を隠さない
-
-* なぜ再生成しているのか
-* なぜ終了したのか
-
-を、**必ず理由付きで出力**します。
-
-これはデバッグ用途だけでなく、
-**利用者の安心感**にも直結します。
-
+これだけで「いま何回目の生成か」「次にどんなアクションが走るのか」が把握できます。
+看板のように状態が見えることで、LangGraphの効果がそのまま利用者にも伝わります。
 
 
 ## 3.5 失敗しにくいCLIにするための工夫
 
-### iteration上限の明示
+### 進捗が明示される
 
-```text
-[3/3] Regenerate report
-[Review] Score: 78
-→ STOP (max iteration reached)
-```
+ログには常に `[現在回/最大回]` が出るため、ループが暴走しているのか、そろそろ終わるのかが即座に分かります。
+「なぜ1回で終わったのか」「なぜ再生成するのか」も `→ ACCEPT / → REJECT` の行で説明されるので、待っている側も安心です。
 
-* 無限ループしない
-* 状態が見て分かる
+### 途中結果も必ず保存される
 
-という点で、非常に重要です。
+生成に成功したタイミングで `report/weekly-report-YYYY_MM_DD_hh-mm.md` が作成されます。
+最後の案だけでなく「どの案が合格したのか」もファイル名とログから追えるので、後からレビューしたいときも混乱しません。
 
+### エラーは人間が即判断できる
 
-
-### 生成物は必ずファイルに残す
-
-* 途中生成
-* 不合格案
-
-も含めて、すべてログフォルダに保存します。
-
-> 「失敗＝消える」
-> にならないことが、心理的安全性を生みます。
-
-
-
-### エラーは「AIのせい」にしない
-
-* git log が取得できない
-* 対象ファイルが存在しない
+`git log` が取れない／レポートファイルが見つからないなど、人間が対処すべきエラーは CLI がそのまま出します。
+AIが沈黙して終わるのではなく、「ここで止まったので次にやるべきこと」が常に可視化されます。
 
 など、**人間が直せるエラー**は
 必ず明確なメッセージで止めます。
@@ -876,7 +840,7 @@ State設計が甘いと、次のような問題が起きます。
 
 ```python:state.py
 # state.py
-"""TypedDict schemas that make LangGraph state explicit."""
+"""LangGraph で扱う状態を TypedDict で明示する。"""
 
 # LangGraph 全体で共有する状態構造を TypedDict で明示する
 
@@ -884,7 +848,7 @@ from typing import TypedDict
 
 
 class ReviewResult(TypedDict):
-    """Score and feedback emitted by a single reviewer role."""
+    """単一の評価者が出力するスコアとフィードバック。"""
 
     # 単一レビューアーが出力するメタ情報
     reviewer: str  # reviewer role (e.g. tech / manager / writer)
@@ -893,7 +857,7 @@ class ReviewResult(TypedDict):
 
 
 class GitDiffEntry(TypedDict):
-    """`git log -p` output captured for one repository path."""
+    """1つのリポジトリから取得した `git log -p` の内容。"""
 
     # リポジトリパスとその差分テキストの組
     repo_path: str
@@ -901,7 +865,7 @@ class GitDiffEntry(TypedDict):
 
 
 class WeeklyReportState(TypedDict):
-    """Canonical state shared across LangGraph nodes for weekly report generation."""
+    """週報生成フロー全体で共有する状態。"""
 
     # 入力
     git_diffs: list[GitDiffEntry]  # リポジトリごとの差分（生データ）
@@ -922,7 +886,6 @@ class WeeklyReportState(TypedDict):
     selected_repos: list[str]  # CLIで指定されたリポジトリ一覧
     since: str | None  # git log の基準日
     is_approved: bool  # 承認済みかどうか
-
 
 ```
 
@@ -1134,82 +1097,6 @@ Stateが明確に定義されていれば、
 
 という **設計の問題**です。
 
-
-
-### generator.py　実装コード
-```python:generator.py
-"""LLM-backed generator node that produces or rewrites weekly reports."""
-
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, SystemMessage
-from state import WeeklyReportState
-from dotenv import load_dotenv
-import os
-
-load_dotenv()
-
-llm = ChatOpenAI(
-    model="gpt-5",
-    api_key=os.getenv("OPENAI_KEY")
-)
-
-
-def _build_prompt(state: WeeklyReportState) -> list:
-    """Construct the system/human prompts depending on iteration count."""
-    # iteration 0 は初回生成、以降は再生成として扱う
-    if state.iteration == 0:
-        system_prompt = """
-あなたは優秀なソフトウェアエンジニアです。
-以下の git の変更履歴をもとに、社内向けの週報を作成してください。
-
-・技術的に正確であること
-・読み手（上司・チーム）が理解しやすいこと
-・簡潔だが情報不足にならないこと
-"""
-        human_prompt = f"""
-【git diff / log】
-{state.git_diff_text}
-
-上記をもとに、以下の構成で週報を書いてください。
-
-- 今週やったこと
-- 技術的なポイント
-- 課題・懸念点
-"""
-    else:
-        system_prompt = """
-あなたはレビュー指摘を的確に反映できるシニアエンジニアです。
-前回の週報を改善してください。
-"""
-        human_prompt = f"""
-【前回の週報】
-{state.report_draft}
-
-【レビュー指摘】
-{state.reviews}
-
-上記の指摘をすべて反映し、
-より完成度の高い週報に書き直してください。
-"""
-        return [
-            SystemMessage(content=system_prompt.strip()),
-            HumanMessage(content=human_prompt.strip())
-        ]
-
-
-def generate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
-    """LangGraph node that invokes the LLM and updates the report draft."""
-    # プロンプトを組み立てて LLM を呼び出す
-    messages = _build_prompt(state)
-    response = llm.invoke(messages)
-    state.report_draft = response.content
-    # 生成回数をインクリメントしてループ制御に使う
-    state.iteration += 1
-    return state
-
-
-```
-
 ## 5.1 git log -p をどうLLMに渡すか
 
 ### 全部渡せばいい、は間違い
@@ -1276,23 +1163,28 @@ LLMには **「読みやすい1つのテキスト」** を渡したいところ�
 
 ```python:git_loader.py
 # git_loader.py
-"""Utility node that fetches git diffs for every requested repository."""
+"""CLIで指定されたすべてのリポジトリから git diff を取得するノード。"""
 
 from pathlib import Path
 import subprocess
-
+import typer
 from state import WeeklyReportState
+
+LOG_PREFIX = "[load_git]"
 
 
 def load_git_diff(state: WeeklyReportState) -> WeeklyReportState:
-    """Populate `git_diffs` and `git_diff_text` based on the repositories in state."""
-    # CLIで指定されたリポジトリがなければカレントディレクトリを対象にする
-    repo_paths = state.selected_repos or [str(Path.cwd())]
+    """Stateにリポジトリ別の diff と連結テキストを格納する。"""
+    # CLIでリポジトリが指定されていなければカレントディレクトリを使う
+    repo_paths = state["selected_repos"] or [str(Path.cwd())]
+    typer.echo(
+        f"{LOG_PREFIX} fetching diffs from {len(repo_paths)} repo(s)...")
 
     diffs = []
     for repo in repo_paths:
-        # リポジトリごとに log -p を実行し raw diff を取得
+        # 各リポジトリで git log -p を実行して差分を取得
         repo_path = Path(repo).expanduser().resolve()
+        typer.echo(f"{LOG_PREFIX} running git log -p in {repo_path}")
         cmd = [
             "git",
             "-C",
@@ -1300,8 +1192,8 @@ def load_git_diff(state: WeeklyReportState) -> WeeklyReportState:
             "log",
             "-p",
         ]
-        if state.since:
-            cmd.extend(["--since", state.since])
+        if state["since"]:
+            cmd.extend(["--since", state["since"]])
 
         result = subprocess.run(
             cmd,
@@ -1322,10 +1214,11 @@ def load_git_diff(state: WeeklyReportState) -> WeeklyReportState:
     )
 
     # LangGraph状態へ diff の生データと LLM向けテキストの両方を保存
-    state.git_diffs = diffs
-    state.git_diff_text = stitched.strip()
+    state["git_diffs"] = diffs
+    state["git_diff_text"] = stitched.strip()
+    typer.echo(
+        f"{LOG_PREFIX} collected {len([d for d in diffs if d['diff']])} repo diffs")
     return state
-
 
 ```
 
@@ -1438,6 +1331,99 @@ def load_git_diff(state: WeeklyReportState) -> WeeklyReportState:
 これが、安定した改善ループを作るコツです。
 
 
+### generator.py　実装コード
+```python:generator.py
+"""週報の下書きをLLMで生成・再生成するノード。"""
+
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
+from state import WeeklyReportState
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+llm = ChatOpenAI(
+    model="gpt-5",
+    api_key=os.getenv("OPENAI_KEY")
+)
+
+
+def _build_prompt(state: WeeklyReportState) -> list:
+    """iterationごとに適切なプロンプトを組み立てる。"""
+    # iteration 0 は初回生成、以降は再生成として扱う
+    if state["iteration"] == 0:
+        system_prompt = """
+あなたは優秀なソフトウェアエンジニアです。
+以下の git の変更履歴をもとに、社内向けの週報を作成してください。
+
+・技術的に正確であること
+・読み手（上司・チーム）が理解しやすいこと
+・簡潔だが情報不足にならないこと
+"""
+        human_prompt = f"""
+【git diff / log】
+{state["git_diff_text"]}
+
+上記をもとに、以下の構成で週報を書いてください。
+
+- 今週やったこと
+- 技術的なポイント
+- 課題・懸念点
+"""
+    else:
+        system_prompt = """
+あなたはレビュー指摘を的確に反映できるシニアエンジニアです。
+前回の週報を改善してください。
+"""
+        human_prompt = f"""
+【前回の週報】
+{state["report_draft"]}
+
+【レビュー指摘】
+{state["reviews"]}
+
+上記の指摘をすべて反映し、
+より完成度の高い週報に書き直してください。
+"""
+    return [
+        SystemMessage(content=system_prompt.strip()),
+        HumanMessage(content=human_prompt.strip())
+    ]
+
+
+def _invoke_llm(state: WeeklyReportState) -> WeeklyReportState:
+    """LLMを呼び出し draft と iteration を更新する共通処理。"""
+    # プロンプトを組み立てて LLM を呼び出す
+    messages = _build_prompt(state)
+    response = llm.invoke(messages)
+    state["report_draft"] = response.content
+    # 生成回数をインクリメントしてループ制御に使う
+    state["iteration"] += 1
+    return state
+
+
+def generate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
+    """初回の下書きを生成する LangGraph ノード。"""
+    if state["iteration"] != 0:
+        # 予期せぬ呼び出しでも整合性を保つため警告的に扱う
+        state["iteration"] = 0
+    next_iter = state["iteration"] + 1
+    print(f"[{next_iter}/{state['max_iteration']}] Generate report (initial)")
+    return _invoke_llm(state)
+
+
+def regenerate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
+    """再生成ノード。レビュー指摘を踏まえて書き直す。"""
+    if state["iteration"] == 0:
+        # 再生成なのに初回扱いにならないよう最低1回目として扱う
+        state["iteration"] = 1
+    next_iter = state["iteration"] + 1
+    print(f"[{next_iter}/{state['max_iteration']}] Regenerate report with feedback")
+    return _invoke_llm(state)
+
+
+```
 
 ### この章のまとめ
 
@@ -1465,7 +1451,7 @@ def load_git_diff(state: WeeklyReportState) -> WeeklyReportState:
 ## evaluator.py　実装コード
 ```python:evaluator.py
 # evaluator.py
-"""LLM-based evaluator that scores generated reports."""
+"""生成された週報を採点する LLM 評価ノード。"""
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -1483,7 +1469,7 @@ llm = ChatOpenAI(
 
 
 def _build_prompt(state: WeeklyReportState) -> list:
-    """Create the evaluation prompt demanding a numeric score and feedback."""
+    """数値スコアとフィードバックを必ず返す評価プロンプトを組み立てる。"""
     # 評価観点と出力フォーマットを厳密に指定
     system_prompt = """
 あなたは厳密で公平なレビュー担当者です。
@@ -1499,7 +1485,7 @@ def _build_prompt(state: WeeklyReportState) -> list:
 """
     human_prompt = f"""
 【週報本文】
-{state.report_draft}
+{state["report_draft"]}
 
 【出力形式（必ず守る）】
 Score: <0-100の整数>
@@ -1515,7 +1501,7 @@ Feedback:
 
 
 def _parse_score(text: str) -> int:
-    """Extract an integer score from the evaluator LLM output."""
+    """LLM出力からスコアを抽出して0〜100に丸める。"""
     # LLM出力からスコアを抽出し、0〜100にクリップ
     match = re.search(f"Score:\s*(\d+)", text)
     if not match:
@@ -1525,16 +1511,36 @@ def _parse_score(text: str) -> int:
 
 
 def evaluate_weekly_report(state: WeeklyReportState) -> WeeklyReportState:
-    """Run the evaluator chain, append the review, and update the score."""
+    """評価チェーンを実行し、Stateにスコアとレビューを追加する。"""
     # 評価を実行し、Stateへスコアとフィードバックを保存
     messages = _build_prompt(state)
     response = llm.invoke(messages)
     content = response.content
     score = _parse_score(content)
 
-    state.reviews.append(content)
-    state.averate_score = score
+    state["reviews"].append(content)
+    state["average_score"] = score
     return state
+
+
+def evaluate_report_file(report_path: str) -> dict:
+    """既存の週報ファイルを採点し、スコアとフィードバックを返す。"""
+    # 既存の週報ファイルを評価し、スコアとフィードバックを返す
+    with open(report_path, "r", encoding="utf-8") as f:
+        report_content = f.read()
+
+    state = WeeklyReportState(
+        report_draft=report_content,
+        reviews=[],
+        average_score=0,
+    )
+
+    evaluated_state = evaluate_weekly_report(state)
+
+    return {
+        "score": evaluated_state["average_score"],
+        "feedback": evaluated_state["reviews"][-1],
+    }
 
 
 ```
@@ -1797,7 +1803,7 @@ Stateには、
 ## multi_evaluator.py　実装コード
 ```python:multi_evaluator.py
 # multi_evaluator.py
-"""Multiple-role evaluator that aggregates weighted review scores."""
+"""複数ロールの評価を重み付きで集約するノード。"""
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -1843,7 +1849,7 @@ REVIEWERS = [
 
 
 def _build_prompt(system_prompt: str, report: str) -> list:
-    """Create the per-role evaluation prompt with a fixed output format."""
+    """各ロール向けの定型評価プロンプトを組み立てる。"""
     human_prompt = f"""
 【週報本文】
 {report}
@@ -1862,7 +1868,7 @@ Feedback:
 
 
 def _parse_score(text: str) -> int:
-    """Extract and clamp the integer score returned by a reviewer LLM."""
+    """レビューワーLLMが返すスコアを抽出し、0〜100に収める。"""
     match = re.search(f"Score:\s*(\d+)", text)
     if not match:
         raise ValueError("Score が見つかりません")
@@ -1871,7 +1877,7 @@ def _parse_score(text: str) -> int:
 
 
 def _evaluate_by_role(role: dict, report: str) -> dict:
-    """Run the LLM for a single reviewer role and return the structured result."""
+    """1ロールぶんの評価を実行し、結果を辞書で返す。"""
     messages = _build_prompt(
         system_prompt=role["system_prompt"],
         report=report
@@ -1892,33 +1898,43 @@ def _evaluate_by_role(role: dict, report: str) -> dict:
 def multi_evaluate_weekly_report(
         state: WeeklyReportState
 ) -> WeeklyReportState:
-    """Iterate through all reviewers, aggregate weighted scores, store feedback."""
+    """全ロールの評価を回し、重み付き平均とフィードバックをStateに反映する。"""
     results: list[dict] = []
 
     for role in REVIEWERS:
         # ロールごとに独立して評価を実行
         result = _evaluate_by_role(
             role=role,
-            report=state.report_draft
+            report=state["report_draft"]
         )
         results.append(result)
+        print(f"[Review:{role['name']}] Score: {result['score']}")
 
-        # 重み付き平均で総合スコアを算出
-        weighted_socre = sum(
-            r["score"] * r["weight"] for r in results
-        )
+    # 重み付き平均で総合スコアを算出
+    weighted_socre = sum(
+        r["score"] * r["weight"] for r in results
+    )
 
-        state.average_socre = round(weighted_socre)
-        # レビュー結果は再生成プロンプトなどで再利用する
-        state.reviews.extend(
-            [
-                f"[{r['role'].upper()} REVIEW]\n{r['feedback']}"
-                for r in results
-            ]
-        )
+    state["average_score"] = round(weighted_socre)
+    # レビュー結果は再生成プロンプトなどで再利用する
+    state["reviews"].extend(
+        [
+            f"[{r['role'].upper()} REVIEW]\n{r['feedback']}"
+            for r in results
+        ]
+    )
+    print(f"[Review] Score: {state['average_score']}")
 
-        return state
+    if state["average_score"] >= 80:
+        print(f"→ ACCEPT（{state['iteration']}回目でスコア {state['average_score']} 点に到達）")
+    elif state["iteration"] >= state["max_iteration"]:
+        print(f"→ STOP（最大試行 {state['max_iteration']} 回に達したため終了）")
+    else:
+        remaining = state["max_iteration"] - state["iteration"]
+        print(f"→ REJECT（80点未満。残り {remaining} 回の再生成を実行）")
+    print()
 
+    return state
 
 ```
 
@@ -2206,7 +2222,10 @@ LangGraphを使う最大の価値の1つです。
 ## build_graph.py　実装コード
 ```python:build_graph.py
 # build_graph.py
-"""LangGraph wiring for the weekly report generation workflow."""
+"""週報生成フローを LangGraph で配線するモジュール。"""
+
+from datetime import datetime
+from pathlib import Path
 
 from langgraph.graph import StateGraph, END
 
@@ -2218,10 +2237,10 @@ from multi_evaluator import multi_evaluate_weekly_report
 
 def should_continue(state: WeeklyReportState) -> str:
     """評価結果と試行回数に応じて次の遷移を返す。"""
-    if state.average_score >= 80:
+    if state["average_score"] >= 80:
         return "approve"
 
-    if state.iteration >= state.max_iteration:
+    if state["iteration"] >= state["max_iteration"]:
         return "stop"
 
     return "regenerate"
@@ -2260,6 +2279,21 @@ def build_graph():
     return graph.compile()
 
 
+def _save_report(state: WeeklyReportState) -> Path:
+    """report/ ディレクトリに Markdown レポートを保存する。"""
+    output_dir = Path("report")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y_%m_%d_%H-%M")
+    filename = f"weekly-report-{timestamp}.md"
+    report_path = output_dir / filename
+
+    content = (state["report_draft"] or "").strip()
+    report_path.write_text(content + ("\n" if content else ""), encoding="utf-8")
+
+    return report_path
+
+
 def run_graph(
         since: str | None = None,
         max_iteration: int = 3,
@@ -2285,8 +2319,9 @@ def run_graph(
     # 実際にグラフを実行
     final_state = graph.invoke(initial_state)
 
-    return final_state
+    report_path = _save_report(final_state)
 
+    return final_state, report_path
 
 ```
 
@@ -2841,60 +2876,15 @@ LangGraphは、それを **サボらず・ブレず・自動でやらせるた�
 この設計をベースに、
 ぜひ **あなたの業務に合わせたStateと評価軸**を作ってみてください。
 
-週報は、ただの入口にすぎません。
+LangGraphは「一発で賢い文章を作る」ためではなく、
+状態を持たせ、複数視点で評価し、条件分岐と再生成を繰り返すことで
+**改善プロセスを自動化するためのフレームワーク**でした。
 
+最初は個人の週報ツールとしてでも構いません。
+評価軸・スコア・出力フォーマットを共有すれば、チーム全体で使える道具に変わります。
+生成AIを導入する価値は、作業量を減らすことよりも、**基準を揃えること**にこそあります。
 
-
-## おわりに
-
-### LangGraphは「賢い生成」より「改善の自動化」
-
-本記事を通して見てきたように、
-LangGraphの本当の強みは「賢い文章を一発で生成すること」ではありません。
-
-* 状態を持たせる
-* 評価させる
-* 条件で分岐させる
-* 合格するまで回す
-
-つまり、
-
-> **改善のプロセスを自動化すること**
-
-にあります。
-
-LLMは、ときどき良い文章を書きます。
-しかし、**安定して“使える成果物”を出すのは、評価と再生成の仕組み**です。
-
-LangGraphは、この「当たり前だけど面倒な工程」を
-コードとして正直に書けるフレームワークでした。
-
-
-
-### 個人ツールからチームツールへ
-
-最初は、あなた自身の週報生成ツールとして作ったとしても構いません。
-
-しかし、
-
-* 評価軸を共有する
-* スコア基準を揃える
-* 出力フォーマットを統一する
-
-これらが揃った瞬間、このツールは **チームの道具**になります。
-
-* 新人の週報が読みやすくなる
-* レビューの観点が揃う
-* 「何が良い週報か」が言語化される
-
-生成AIを導入する本当の価値は、
-**作業を減らすことではなく、基準を揃えること**にあるのかもしれません。
-
-
-
-### 次に作るなら何を足すか
-
-もしこのツールを発展させるなら、次のような拡張が考えられます。
+次の一歩としては、
 
 * 過去週報との比較評価
 * チームごとの評価プロファイル
@@ -2902,15 +2892,11 @@ LangGraphは、この「当たり前だけど面倒な工程」を
 * Slack / GitHub との連携
 * 人間レビューとのハイブリッド承認
 
-いずれも、**Stateを1つ足すだけで設計に組み込める**はずです。
+といった機能が考えられます。
+Stateを1つ足すだけで、これらも自然に設計へ組み込めるはずです。
 
-
-
-LLMアプリケーションは、
-「何を生成するか」よりも「どう改善させるか」で差が出ます。
-
-その設計を考える材料として、
-この記事があなたの引き出しの1つになれば幸いです。
+LLMアプリは「何を生成するか」だけでなく、
+**「どう改善させるか」**で差が出ます。
 
 ぜひ、あなたの業務に合わせた
-**レビューされるAI**を作ってみてください。
+**レビューされるAI**を作ってみてください！
