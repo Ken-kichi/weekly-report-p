@@ -309,6 +309,16 @@ LangGraphは、
 5. **必要に応じた再生成ループ**
 6. **合格した週報を Markdown で保存**
 
+```mermaid
+flowchart TD
+    A["1. git log 取得"] --> B["2. 週報の下書き生成"]
+    B --> C["3. 複数エージェントによる評価"]
+    C --> D["4. スコア判定（合否）"]
+    D -->|80点以上| F["6. Markdown で保存"]
+    D -->|80点未満| E["5. 再生成ループ"]
+    E --> B
+```
+
 重要なのは、
 「生成 → 評価 → 終了」では終わらない点です。
 
@@ -2334,16 +2344,14 @@ def run_graph(
 まずは全体像を把握しましょう。
 評価ループ込みのLangGraphは、以下のような構成になります。
 
-```
-[Generate]
-    ↓
-[Review (複数)]
-    ↓
-[Aggregate Score]
-    ↓
-{ score >= 80 ? }
-   ├─ Yes → [Approve] → END
-   └─ No  → [Regenerate] → Generate
+```mermaid
+flowchart TD
+    Generate["Generate"] --> Review["Review (複数)"]
+    Review --> Aggregate["Aggregate Score"]
+    Aggregate -->|平均>=80| Approve["Approve"]
+    Aggregate -->|平均<80| Regenerate["Regenerate"]
+    Regenerate --> Generate
+    Approve --> END["END"]
 ```
 
 これをLangGraphで表現すると、
@@ -2450,6 +2458,35 @@ app = graph.compile()
 * フローが図としてそのまま読める
 
 という点です。
+
+やり取りが複雑になる生成〜評価ループは、以下のシーケンスで整理できます。
+
+```mermaid
+sequenceDiagram
+    participant CLI
+    participant Graph
+    participant Generator
+    participant Evaluators as Evaluators (tech/manager/writer)
+    participant Aggregator
+    participant Decision as 判定
+
+    CLI->>Graph: run_graph()
+    loop iteration <= max
+        Graph->>Generator: generate / regenerate
+        Generator-->>Graph: report_draft
+        Graph->>Evaluators: multi_evaluate_weekly_report()
+        Evaluators-->>Graph: 個別スコア+FB
+        Graph->>Aggregator: 平均スコア計算
+        Aggregator-->>Graph: average_score
+        Graph->>Decision: should_continue(state)
+        alt 平均>=80
+            Decision-->>Graph: approve
+            Graph-->>CLI: 合格レポートと保存先
+        else 平均<80
+            Decision-->>Graph: regenerate or stop
+        end
+    end
+```
 
 
 
